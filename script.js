@@ -523,6 +523,36 @@ function shootBall(shooter, defender) {
   setMessage(shooter.type === "player" ? "Shoot!" : "CPU shoots!");
 }
 
+function maybeBlockShot(defender, shooter) {
+  if (
+    !game.pendingShot ||
+    game.pendingShot.counted ||
+    defender.blockTimer <= 0 ||
+    ball.mode !== "air" ||
+    Math.abs(defender.x - ball.x) > 30 ||
+    Math.abs((defender.y - 44) - ball.y) > 42
+  ) {
+    return false;
+  }
+
+  const blockChance = defender.type === "cpu" ? 0.8 : 0.72;
+  if (Math.random() > blockChance) {
+    return false;
+  }
+
+  const direction = defender.type === "cpu" ? -1 : 1;
+  ball.vx = (2.8 + Math.random() * 1.5) * direction;
+  ball.vy = -3.4 - Math.random() * 1.4;
+  ball.mode = "loose";
+  ball.holder = null;
+  ball.justHitBackboard = false;
+  game.pendingShot = null;
+  defender.blockTimer = 0;
+  playBlockSound();
+  setMessage(defender.type === "cpu" ? "CPU block!" : "Block! Loose ball.");
+  return true;
+}
+
 function awardScore(team) {
   if (game.pendingShot?.counted) {
     return;
@@ -708,6 +738,10 @@ function updateBall() {
   ball.x += ball.vx;
   ball.y += ball.vy;
   ball.vy += BALL_GRAVITY;
+
+  if (maybeBlockShot(cpu, player) || maybeBlockShot(player, cpu)) {
+    return;
+  }
 
   for (const hoop of [HOOPS.left, HOOPS.right]) {
     const isBackboardHit =
