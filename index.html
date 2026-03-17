@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Basketball Shot Challenge</title>
+    <title>Mini Hoop Showdown</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -11,31 +11,31 @@
       <section class="game-card">
         <header class="hud">
           <div class="hud-item">
-            <span class="hud-label">Score</span>
+            <span class="hud-label">Player</span>
             <strong id="scoreValue">0</strong>
           </div>
           <div class="hud-item">
+            <span class="hud-label">CPU</span>
+            <strong id="levelValue">0</strong>
+          </div>
+          <div class="hud-item">
             <span class="hud-label">Level</span>
-            <strong id="levelValue">1</strong>
+            <strong id="shotsValue">1</strong>
           </div>
           <div class="hud-item">
-            <span class="hud-label">Shots Left</span>
-            <strong id="shotsValue">5</strong>
-          </div>
-          <div class="hud-item">
-            <span class="hud-label">Best</span>
+            <span class="hud-label">Possession</span>
             <strong id="bestValue">0</strong>
           </div>
           <div class="hud-item">
-            <span class="hud-label">Streak</span>
+            <span class="hud-label">Best Level</span>
             <strong id="streakValue">0</strong>
           </div>
         </header>
 
         <section class="message-row">
-          <p id="messageText">Drag from the ball toward the hoop to aim.</p>
+          <p id="messageText">Use A/D to move, Shift to sprint, Space to shoot or jump, and S to steal or block.</p>
           <button id="restartButton" class="ghost-button" type="button">
-            Try Again
+            Restart Run
           </button>
         </section>
 
@@ -49,9 +49,9 @@
 
           <div id="overlay" class="overlay">
             <div class="overlay-card">
-              <h1>Basketball Shot Challenge</h1>
+              <h1>Mini Hoop Showdown</h1>
               <p id="overlayText">
-                Sink baskets, level up, and see how high you can score.
+                Beat the CPU on the blacktop. Every level makes the defender tougher.
               </p>
               <button id="overlayButton" class="play-button" type="button">
                 Start Game
@@ -61,8 +61,8 @@
         </section>
 
         <footer class="help-text">
-          Drag from the ball toward your shot. Release to shoot. Make enough
-          baskets to reach the next level.
+          Score before the CPU does. Win the level to face a smarter, faster
+          opponent.
         </footer>
       </section>
     </main>

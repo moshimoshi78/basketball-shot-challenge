@@ -1,11 +1,11 @@
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 
-const scoreValue = document.getElementById("scoreValue");
-const levelValue = document.getElementById("levelValue");
-const shotsValue = document.getElementById("shotsValue");
-const bestValue = document.getElementById("bestValue");
-const streakValue = document.getElementById("streakValue");
+const playerScoreValue = document.getElementById("scoreValue");
+const cpuScoreValue = document.getElementById("levelValue");
+const levelValue = document.getElementById("shotsValue");
+const possessionValue = document.getElementById("bestValue");
+const bestLevelValue = document.getElementById("streakValue");
 const messageText = document.getElementById("messageText");
 const restartButton = document.getElementById("restartButton");
 const overlay = document.getElementById("overlay");
@@ -14,88 +14,108 @@ const overlayButton = document.getElementById("overlayButton");
 
 const WIDTH = canvas.width;
 const HEIGHT = canvas.height;
-const FLOOR_Y = HEIGHT - 86;
-const BALL_RADIUS = 16;
-let audioContext = null;
+const FLOOR_Y = HEIGHT - 82;
+const BALL_RADIUS = 13;
+const PLAYER_HEIGHT = 74;
+const PLAYER_WIDTH = 28;
+const PLAYER_START_X = 220;
+const CPU_START_X = 630;
+const GRAVITY = 0.42;
+const BALL_GRAVITY = 0.26;
+const HOOP = {
+  x: 810,
+  y: 212,
+  rimRadius: 38,
+  rimY: 220,
+  backboardX: 852,
+  backboardTop: 132,
+  backboardWidth: 16,
+  backboardHeight: 132,
+  netHeight: 54
+};
 const LEVELS = [
-  { hoopX: 720, hoopY: 220, move: 0, targetMakes: 2, guide: true, wind: 0 },
-  { hoopX: 810, hoopY: 210, move: 0, targetMakes: 2, guide: true, wind: 0 },
-  { hoopX: 835, hoopY: 195, move: 0.85, targetMakes: 3, guide: true, wind: 0.004 },
-  { hoopX: 840, hoopY: 185, move: 1.15, targetMakes: 3, guide: false, wind: 0.006 },
-  { hoopX: 870, hoopY: 170, move: 1.5, targetMakes: 4, guide: false, wind: 0.009 }
+  { name: "Rookie", cpuSpeed: 2.1, cpuSprint: 3.0, shotSkill: 0.48, contest: 0.18, stealRate: 0.004, reaction: 0.02, targetScore: 5 },
+  { name: "Starter", cpuSpeed: 2.35, cpuSprint: 3.2, shotSkill: 0.54, contest: 0.24, stealRate: 0.005, reaction: 0.026, targetScore: 5 },
+  { name: "Street Pro", cpuSpeed: 2.65, cpuSprint: 3.45, shotSkill: 0.61, contest: 0.31, stealRate: 0.0065, reaction: 0.032, targetScore: 6 },
+  { name: "Lockdown", cpuSpeed: 2.9, cpuSprint: 3.8, shotSkill: 0.68, contest: 0.38, stealRate: 0.008, reaction: 0.04, targetScore: 6 },
+  { name: "Blacktop Boss", cpuSpeed: 3.15, cpuSprint: 4.1, shotSkill: 0.74, contest: 0.46, stealRate: 0.0105, reaction: 0.05, targetScore: 7 }
 ];
+
+let audioContext = null;
 
 const game = {
   state: "menu",
-  score: 0,
-  best: Number(localStorage.getItem("basketball-best-score") || 0),
   levelIndex: 0,
-  shotsLeft: 5,
-  makesThisLevel: 0,
-  streak: 0,
-  shotInFlight: false,
-  dragging: false,
-  dragPoint: null,
-  pointerId: null,
-  justScored: false,
-  lastTime: 0,
-  levelBannerTimer: 0,
-  rimSoundTimer: 0
+  playerScore: 0,
+  cpuScore: 0,
+  possession: "player",
+  bestLevel: Number(localStorage.getItem("mini-hoop-best-level") || 1),
+  pendingShot: null,
+  rimSoundTimer: 0,
+  dribbleTimer: 0,
+  bannerTimer: 0,
+  bannerText: "",
+  pointerWasUsed: false,
+  cpuShotCooldown: 0,
+  lastTime: 0
 };
+
+const keys = {
+  left: false,
+  right: false,
+  sprint: false,
+  shoot: false,
+  defend: false
+};
+
+const controls = {
+  shootWasDown: false,
+  defendWasDown: false
+};
+
+function createActor(type, x, color) {
+  return {
+    type,
+    x,
+    y: FLOOR_Y,
+    vx: 0,
+    vy: 0,
+    width: PLAYER_WIDTH,
+    height: PLAYER_HEIGHT,
+    color,
+    hasBall: false,
+    facing: 1,
+    onGround: true,
+    shotCharge: 0,
+    chargeLocked: false,
+    stealCooldown: 0,
+    blockTimer: 0,
+    blinkTimer: 0
+  };
+}
+
+const player = createActor("player", PLAYER_START_X, "#ff9d2a");
+const cpu = createActor("cpu", CPU_START_X, "#5bd3ff");
 
 const ball = {
-  x: 170,
-  y: FLOOR_Y - BALL_RADIUS,
-  prevX: 170,
-  prevY: FLOOR_Y - BALL_RADIUS,
+  x: player.x + 16,
+  y: player.y - 34,
   vx: 0,
   vy: 0,
-  rotation: 0,
-  resting: true
-};
-
-const hoop = {
-  x: LEVELS[0].hoopX,
-  y: LEVELS[0].hoopY,
-  rimRadius: 44,
-  netHeight: 58,
-  baseX: LEVELS[0].hoopX,
-  direction: 1,
-  backboardWidth: 28,
-  backboardHeight: 158,
-  netSwing: 0,
-  scoreFlashTimer: 0
+  radius: BALL_RADIUS,
+  mode: "held",
+  holder: "player",
+  bounceCount: 0,
+  scored: false,
+  justHitBackboard: false
 };
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-function getCurrentLevel() {
+function currentLevel() {
   return LEVELS[Math.min(game.levelIndex, LEVELS.length - 1)];
-}
-
-function resetBall() {
-  ball.x = 170;
-  ball.y = FLOOR_Y - BALL_RADIUS;
-  ball.prevX = ball.x;
-  ball.prevY = ball.y;
-  ball.vx = 0;
-  ball.vy = 0;
-  ball.rotation = 0;
-  ball.resting = true;
-  game.shotInFlight = false;
-  game.dragging = false;
-  game.dragPoint = null;
-  game.pointerId = null;
-  game.justScored = false;
-}
-
-function triggerScoreCelebration() {
-  hoop.netSwing = 18;
-  hoop.scoreFlashTimer = 40;
-  playScoreSound();
-  playCrowdCheer();
 }
 
 function ensureAudioContext() {
@@ -114,7 +134,22 @@ function ensureAudioContext() {
   return audioContext;
 }
 
-function playScoreSound() {
+function createNoiseBuffer(durationSeconds, scaleFn) {
+  const ctxAudio = ensureAudioContext();
+  if (!ctxAudio) {
+    return null;
+  }
+
+  const buffer = ctxAudio.createBuffer(1, Math.floor(ctxAudio.sampleRate * durationSeconds), ctxAudio.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i += 1) {
+    const t = i / data.length;
+    data[i] = (Math.random() * 2 - 1) * scaleFn(t);
+  }
+  return buffer;
+}
+
+function playSwish() {
   const ctxAudio = ensureAudioContext();
   if (!ctxAudio) {
     return;
@@ -123,25 +158,28 @@ function playScoreSound() {
   const now = ctxAudio.currentTime;
   const gain = ctxAudio.createGain();
   gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(0.18, now + 0.02);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.32);
+  gain.gain.exponentialRampToValueAtTime(0.18, now + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.26);
   gain.connect(ctxAudio.destination);
 
-  const toneA = ctxAudio.createOscillator();
-  toneA.type = "triangle";
-  toneA.frequency.setValueAtTime(660, now);
-  toneA.frequency.exponentialRampToValueAtTime(880, now + 0.14);
-  toneA.connect(gain);
-  toneA.start(now);
-  toneA.stop(now + 0.18);
+  const noise = ctxAudio.createBufferSource();
+  noise.buffer = createNoiseBuffer(0.22, (t) => 1 - t);
+  const filter = ctxAudio.createBiquadFilter();
+  filter.type = "bandpass";
+  filter.frequency.setValueAtTime(1500, now);
+  filter.Q.setValueAtTime(1.2, now);
+  noise.connect(filter);
+  filter.connect(gain);
+  noise.start(now);
+  noise.stop(now + 0.22);
 
-  const toneB = ctxAudio.createOscillator();
-  toneB.type = "sine";
-  toneB.frequency.setValueAtTime(990, now + 0.08);
-  toneB.frequency.exponentialRampToValueAtTime(1320, now + 0.24);
-  toneB.connect(gain);
-  toneB.start(now + 0.08);
-  toneB.stop(now + 0.3);
+  const shimmer = ctxAudio.createOscillator();
+  shimmer.type = "triangle";
+  shimmer.frequency.setValueAtTime(620, now);
+  shimmer.frequency.exponentialRampToValueAtTime(980, now + 0.12);
+  shimmer.connect(gain);
+  shimmer.start(now + 0.01);
+  shimmer.stop(now + 0.16);
 }
 
 function playCrowdCheer() {
@@ -153,51 +191,24 @@ function playCrowdCheer() {
   const now = ctxAudio.currentTime;
   const master = ctxAudio.createGain();
   master.gain.setValueAtTime(0.0001, now);
-  master.gain.exponentialRampToValueAtTime(0.075, now + 0.03);
-  master.gain.exponentialRampToValueAtTime(0.0001, now + 1.1);
+  master.gain.exponentialRampToValueAtTime(0.07, now + 0.03);
+  master.gain.exponentialRampToValueAtTime(0.0001, now + 0.9);
   master.connect(ctxAudio.destination);
 
-  const buffer = ctxAudio.createBuffer(1, Math.floor(ctxAudio.sampleRate * 1.15), ctxAudio.sampleRate);
-  const data = buffer.getChannelData(0);
-  for (let i = 0; i < data.length; i += 1) {
-    const t = i / data.length;
-    const wobble = 0.65 + 0.35 * Math.sin(t * 18);
-    data[i] = (Math.random() * 2 - 1) * (1 - t) * wobble;
-  }
-
-  const source = ctxAudio.createBufferSource();
-  source.buffer = buffer;
-
-  const crowdFilter = ctxAudio.createBiquadFilter();
-  crowdFilter.type = "bandpass";
-  crowdFilter.frequency.setValueAtTime(820, now);
-  crowdFilter.frequency.linearRampToValueAtTime(1200, now + 0.4);
-  crowdFilter.Q.setValueAtTime(0.8, now);
-
-  const crowdGain = ctxAudio.createGain();
-  crowdGain.gain.setValueAtTime(1, now);
-  source.connect(crowdFilter);
-  crowdFilter.connect(crowdGain);
-  crowdGain.connect(master);
-  source.start(now);
-  source.stop(now + 1.05);
-
-  const chant = ctxAudio.createOscillator();
-  const chantGain = ctxAudio.createGain();
-  chant.type = "triangle";
-  chant.frequency.setValueAtTime(330, now + 0.06);
-  chant.frequency.linearRampToValueAtTime(392, now + 0.24);
-  chant.frequency.linearRampToValueAtTime(310, now + 0.42);
-  chantGain.gain.setValueAtTime(0.0001, now);
-  chantGain.gain.exponentialRampToValueAtTime(0.018, now + 0.05);
-  chantGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.48);
-  chant.connect(chantGain);
-  chantGain.connect(master);
-  chant.start(now + 0.04);
-  chant.stop(now + 0.5);
+  const crowd = ctxAudio.createBufferSource();
+  crowd.buffer = createNoiseBuffer(0.9, (t) => (1 - t) * (0.7 + 0.3 * Math.sin(t * 18)));
+  const filter = ctxAudio.createBiquadFilter();
+  filter.type = "bandpass";
+  filter.frequency.setValueAtTime(900, now);
+  filter.frequency.linearRampToValueAtTime(1300, now + 0.45);
+  filter.Q.setValueAtTime(0.7, now);
+  crowd.connect(filter);
+  filter.connect(master);
+  crowd.start(now);
+  crowd.stop(now + 0.9);
 }
 
-function playRimSound() {
+function playRimBang() {
   const ctxAudio = ensureAudioContext();
   if (!ctxAudio) {
     return;
@@ -206,336 +217,584 @@ function playRimSound() {
   const now = ctxAudio.currentTime;
   const gain = ctxAudio.createGain();
   gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(0.09, now + 0.01);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+  gain.gain.exponentialRampToValueAtTime(0.16, now + 0.006);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
   gain.connect(ctxAudio.destination);
 
-  const osc = ctxAudio.createOscillator();
-  osc.type = "square";
-  osc.frequency.setValueAtTime(480, now);
-  osc.frequency.exponentialRampToValueAtTime(250, now + 0.16);
-  osc.connect(gain);
-  osc.start(now);
-  osc.stop(now + 0.18);
+  const metalA = ctxAudio.createOscillator();
+  metalA.type = "square";
+  metalA.frequency.setValueAtTime(400, now);
+  metalA.frequency.exponentialRampToValueAtTime(210, now + 0.22);
+  metalA.connect(gain);
+  metalA.start(now);
+  metalA.stop(now + 0.24);
+
+  const metalB = ctxAudio.createOscillator();
+  metalB.type = "triangle";
+  metalB.frequency.setValueAtTime(860, now);
+  metalB.frequency.exponentialRampToValueAtTime(430, now + 0.18);
+  metalB.connect(gain);
+  metalB.start(now + 0.01);
+  metalB.stop(now + 0.18);
 }
 
-function playBounceSound(speed) {
+function playBounceSound(speed = 4) {
   const ctxAudio = ensureAudioContext();
-  if (!ctxAudio || speed < 2.2) {
+  if (!ctxAudio) {
     return;
   }
 
   const now = ctxAudio.currentTime;
-  const level = Math.min(0.12, 0.04 + speed * 0.01);
+  const volume = clamp(0.035 + speed * 0.012, 0.04, 0.16);
   const gain = ctxAudio.createGain();
   gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(level, now + 0.005);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+  gain.gain.exponentialRampToValueAtTime(volume, now + 0.004);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.17);
+  gain.connect(ctxAudio.destination);
+
+  const low = ctxAudio.createOscillator();
+  low.type = "sine";
+  low.frequency.setValueAtTime(185, now);
+  low.frequency.exponentialRampToValueAtTime(76, now + 0.16);
+  low.connect(gain);
+  low.start(now);
+  low.stop(now + 0.17);
+
+  const slap = ctxAudio.createOscillator();
+  slap.type = "triangle";
+  slap.frequency.setValueAtTime(300, now);
+  slap.frequency.exponentialRampToValueAtTime(130, now + 0.11);
+  slap.connect(gain);
+  slap.start(now);
+  slap.stop(now + 0.11);
+}
+
+function playBlockSound() {
+  const ctxAudio = ensureAudioContext();
+  if (!ctxAudio) {
+    return;
+  }
+
+  const now = ctxAudio.currentTime;
+  const gain = ctxAudio.createGain();
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.12, now + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
   gain.connect(ctxAudio.destination);
 
   const osc = ctxAudio.createOscillator();
-  osc.type = "sine";
-  osc.frequency.setValueAtTime(140, now);
-  osc.frequency.exponentialRampToValueAtTime(78, now + 0.2);
+  osc.type = "sawtooth";
+  osc.frequency.setValueAtTime(220, now);
+  osc.frequency.exponentialRampToValueAtTime(110, now + 0.15);
   osc.connect(gain);
   osc.start(now);
-  osc.stop(now + 0.22);
-}
-
-function applyLevelSettings() {
-  const level = getCurrentLevel();
-  hoop.baseX = level.hoopX;
-  hoop.x = level.hoopX;
-  hoop.y = level.hoopY;
-  hoop.direction = 1;
-  game.shotsLeft = 5;
-  game.makesThisLevel = 0;
-  game.levelBannerTimer = 180;
-  resetBall();
-  setMessage(`Level ${game.levelIndex + 1}: First to ${level.targetMakes} baskets!`);
+  osc.stop(now + 0.16);
 }
 
 function setMessage(text) {
   messageText.textContent = text;
 }
 
-function updateHud() {
-  scoreValue.textContent = game.score;
-  levelValue.textContent = game.levelIndex + 1;
-  shotsValue.textContent = game.shotsLeft;
-  bestValue.textContent = game.best;
-  streakValue.textContent = game.streak;
-}
-
-function saveBestScore() {
-  if (game.score > game.best) {
-    game.best = game.score;
-    localStorage.setItem("basketball-best-score", String(game.best));
-  }
-}
-
-function startGame() {
+function startRun() {
   game.state = "playing";
-  game.score = 0;
   game.levelIndex = 0;
-  game.streak = 0;
+  game.playerScore = 0;
+  game.cpuScore = 0;
+  game.bannerTimer = 150;
+  game.bannerText = "Level 1: Rookie";
   overlay.classList.add("hidden");
   overlayButton.textContent = "Play Again";
-  applyLevelSettings();
+  resetLevel("player");
   updateHud();
 }
 
-function endGame(reason) {
-  game.state = "gameover";
-  saveBestScore();
-  updateHud();
-  overlay.classList.remove("hidden");
-  overlayText.textContent = `${reason} Final score: ${game.score}. Best score: ${game.best}.`;
-  setMessage("Press Try Again to jump back in.");
+function resetLevel(startingPossession = "player") {
+  player.x = PLAYER_START_X;
+  player.y = FLOOR_Y;
+  player.vx = 0;
+  player.vy = 0;
+  player.onGround = true;
+  player.hasBall = startingPossession === "player";
+  player.shotCharge = 0;
+  player.blockTimer = 0;
+  player.blinkTimer = 0;
+
+  cpu.x = CPU_START_X;
+  cpu.y = FLOOR_Y;
+  cpu.vx = 0;
+  cpu.vy = 0;
+  cpu.onGround = true;
+  cpu.hasBall = startingPossession === "cpu";
+  cpu.shotCharge = 0;
+  cpu.blockTimer = 0;
+  cpu.blinkTimer = 0;
+
+  game.possession = startingPossession;
+  game.pendingShot = null;
+  game.cpuShotCooldown = 0;
+  game.rimSoundTimer = 0;
+  ball.scored = false;
+  holdBall(startingPossession);
+  setMessage(`${capitalize(startingPossession)} ball. First to ${currentLevel().targetScore}.`);
 }
 
-function levelUp() {
+function holdBall(holderName) {
+  ball.mode = "held";
+  ball.holder = holderName;
+  ball.vx = 0;
+  ball.vy = 0;
+  ball.bounceCount = 0;
+  ball.justHitBackboard = false;
+  player.hasBall = holderName === "player";
+  cpu.hasBall = holderName === "cpu";
+  attachBallToHolder();
+}
+
+function attachBallToHolder() {
+  const holder = ball.holder === "player" ? player : cpu;
+  if (!holder) {
+    return;
+  }
+
+  const dribbleOffset = holder.onGround ? Math.sin(game.lastTime * 0.015 + holder.x * 0.04) * 6 : -16;
+  ball.x = holder.x + holder.facing * 16;
+  ball.y = holder.y - 30 + dribbleOffset;
+}
+
+function updateHud() {
+  playerScoreValue.textContent = game.playerScore;
+  cpuScoreValue.textContent = game.cpuScore;
+  levelValue.textContent = game.levelIndex + 1;
+  possessionValue.textContent = capitalize(game.possession);
+  bestLevelValue.textContent = game.bestLevel;
+}
+
+function capitalize(value) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function saveBestLevel() {
+  const best = Math.max(game.bestLevel, game.levelIndex + 1);
+  if (best !== game.bestLevel) {
+    game.bestLevel = best;
+    localStorage.setItem("mini-hoop-best-level", String(best));
+  }
+}
+
+function startNextLevel() {
   game.levelIndex += 1;
   if (game.levelIndex >= LEVELS.length) {
-    endGame("You beat every level");
+    endRun(true);
     return;
   }
 
-  setMessage("Level up! The next shot is tougher.");
-  applyLevelSettings();
+  game.playerScore = 0;
+  game.cpuScore = 0;
+  game.bannerText = `Level ${game.levelIndex + 1}: ${currentLevel().name}`;
+  game.bannerTimer = 160;
+  resetLevel("player");
   updateHud();
 }
 
-function shootBall(targetX, targetY) {
-  if (!ball.resting || game.state !== "playing" || game.shotsLeft <= 0) {
+function endRun(playerWonGame) {
+  game.state = "gameover";
+  overlay.classList.remove("hidden");
+  overlayText.textContent = playerWonGame
+    ? `You ruled the blacktop and beat every CPU. Best level: ${game.bestLevel}.`
+    : `The CPU won this run. You reached level ${game.levelIndex + 1}.`;
+  overlayButton.textContent = playerWonGame ? "Play Again" : "Try Again";
+  setMessage("Press Restart Run to jump back in.");
+}
+
+function winLevel() {
+  saveBestLevel();
+  game.state = "level-complete";
+  overlay.classList.remove("hidden");
+  overlayText.textContent = `You beat level ${game.levelIndex + 1}. The CPU gets better next round.`;
+  overlayButton.textContent = game.levelIndex === LEVELS.length - 1 ? "Finish Run" : "Next Level";
+  setMessage("Level complete!");
+}
+
+function loseLevel() {
+  game.state = "gameover";
+  overlay.classList.remove("hidden");
+  overlayText.textContent = `The ${currentLevel().name} CPU beat you. Try this level again.`;
+  overlayButton.textContent = "Retry Level";
+  setMessage("The CPU got the better of that one.");
+}
+
+function attemptSteal(attacker, defender) {
+  if (attacker.stealCooldown > 0 || !defender.hasBall || Math.abs(attacker.x - defender.x) > 44 || Math.abs(attacker.y - defender.y) > 40) {
     return;
   }
 
-  const dx = targetX - ball.x;
-  const dy = targetY - ball.y;
-  const power = clamp(Math.hypot(dx, dy), 30, 170);
-  const speedScale = 0.14;
-
-  ball.vx = dx * speedScale;
-  ball.vy = dy * speedScale;
-  ball.prevX = ball.x;
-  ball.prevY = ball.y;
-  ball.resting = false;
-  game.shotInFlight = true;
-  game.justScored = false;
-  game.shotsLeft -= 1;
-  setMessage("Shoot!");
-  updateHud();
+  attacker.stealCooldown = 28;
+  const successChance = attacker.type === "cpu" ? currentLevel().stealRate * 42 : 0.22;
+  if (Math.random() < successChance) {
+    defender.hasBall = false;
+    attacker.hasBall = true;
+    game.possession = attacker.type;
+    holdBall(attacker.type);
+    attacker.blinkTimer = 18;
+    setMessage(attacker.type === "player" ? "Steal! Your ball." : "CPU steal!");
+  }
 }
 
-function nextShotAfterDelay() {
+function jump(actor, power = 8.8) {
+  if (!actor.onGround) {
+    return;
+  }
+
+  actor.vy = -power;
+  actor.onGround = false;
+  actor.blockTimer = 12;
+}
+
+function maybeStartPlayerShot() {
+  if (!player.hasBall || !player.onGround) {
+    return;
+  }
+
+  player.chargeLocked = true;
+}
+
+function maybeReleasePlayerShot() {
+  if (!player.hasBall || !player.chargeLocked) {
+    return;
+  }
+
+  shootBall(player, cpu);
+  player.chargeLocked = false;
+}
+
+function desiredChargeForDistance(distance) {
+  return clamp(0.34 + distance / 700, 0.42, 0.92);
+}
+
+function shootBall(shooter, defender) {
+  const distance = Math.abs(HOOP.x - shooter.x);
+  const chargeTarget = desiredChargeForDistance(distance);
+  const releaseScore = 1 - Math.abs(shooter.shotCharge - chargeTarget) * 1.6;
+  const contestDistance = Math.abs(defender.x - shooter.x);
+  const contestPenalty = contestDistance < 54 ? currentLevel().contest * (defender.blockTimer > 0 ? 1.1 : 0.8) : 0;
+  const distancePenalty = clamp((distance - 180) / 520, 0, 0.38);
+  const skillBonus = shooter.type === "cpu" ? currentLevel().shotSkill : 0.58;
+  const makeChance = clamp(skillBonus + releaseScore * 0.32 - distancePenalty - contestPenalty, 0.12, 0.92);
+  const made = Math.random() < makeChance;
+
+  shooter.hasBall = false;
+  shooter.shotCharge = 0;
+  game.pendingShot = {
+    shooter: shooter.type,
+    made,
+    counted: false
+  };
+
+  if (shooter.onGround) {
+    jump(shooter, 7.6);
+  }
+
+  const targetX = made ? HOOP.x : HOOP.x + (Math.random() < 0.5 ? -42 : 52);
+  const targetY = made ? HOOP.rimY + 8 : HOOP.rimY - 18;
+  const time = clamp(Math.abs(targetX - shooter.x) / 10, 24, 40);
+  const dx = targetX - (shooter.x + shooter.facing * 16);
+  const dy = targetY - (shooter.y - 38);
+
+  ball.mode = "air";
+  ball.holder = null;
+  ball.x = shooter.x + shooter.facing * 16;
+  ball.y = shooter.y - 38;
+  ball.vx = dx / time;
+  ball.vy = (dy - 0.5 * BALL_GRAVITY * time * time) / time;
+  ball.scored = false;
+  ball.justHitBackboard = false;
+
+  setMessage(shooter.type === "player" ? "Shoot!" : "CPU shoots!");
+}
+
+function awardScore(team) {
+  if (game.pendingShot?.counted) {
+    return;
+  }
+
+  if (game.pendingShot) {
+    game.pendingShot.counted = true;
+  }
+
+  if (team === "player") {
+    game.playerScore += 1;
+    setMessage("Swish! You scored.");
+  } else {
+    game.cpuScore += 1;
+    setMessage("CPU bucket.");
+  }
+
+  playSwish();
+  playCrowdCheer();
+  game.bannerText = team === "player" ? "BUCKET!" : "CPU SCORED";
+  game.bannerTimer = 55;
+  updateHud();
+
+  const target = currentLevel().targetScore;
+  if (game.playerScore >= target) {
+    window.setTimeout(winLevel, 650);
+    return;
+  }
+  if (game.cpuScore >= target) {
+    window.setTimeout(loseLevel, 650);
+    return;
+  }
+
   window.setTimeout(() => {
-    if (game.state === "playing" && !game.dragging) {
-      resetBall();
+    if (game.state === "playing") {
+      resetLevel(team === "player" ? "cpu" : "player");
       updateHud();
     }
-  }, 650);
+  }, 700);
 }
 
-function registerScore() {
-  if (game.justScored) {
-    return;
+function updateActor(actor, movement, sprinting) {
+  const speed = actor.type === "cpu" ? (sprinting ? currentLevel().cpuSprint : currentLevel().cpuSpeed) : (sprinting ? 4.0 : 2.8);
+  actor.vx = movement * speed;
+  actor.x += actor.vx;
+  actor.x = clamp(actor.x, 80, 820);
+  if (movement !== 0) {
+    actor.facing = movement > 0 ? 1 : -1;
   }
 
-  game.justScored = true;
-  game.makesThisLevel += 1;
-  game.streak += 1;
-  const comboBonus = game.streak >= 2 ? game.streak : 0;
-  game.score += 1 + comboBonus;
-  triggerScoreCelebration();
-  saveBestScore();
-  updateHud();
-
-  if (comboBonus > 0) {
-    setMessage(`Nice shot! Combo bonus +${comboBonus}!`);
-  } else {
-    setMessage("Nice shot!");
+  actor.y += actor.vy;
+  actor.vy += GRAVITY;
+  if (actor.y >= FLOOR_Y) {
+    actor.y = FLOOR_Y;
+    actor.vy = 0;
+    actor.onGround = true;
   }
 
-  if (game.makesThisLevel >= getCurrentLevel().targetMakes) {
-    window.setTimeout(levelUp, 900);
-  } else {
-    nextShotAfterDelay();
+  if (actor.stealCooldown > 0) {
+    actor.stealCooldown -= 1;
+  }
+  if (actor.blockTimer > 0) {
+    actor.blockTimer -= 1;
+  }
+  if (actor.blinkTimer > 0) {
+    actor.blinkTimer -= 1;
   }
 }
 
-function missShot() {
-  if (game.justScored) {
-    return;
-  }
+function updatePlayer() {
+  const movement = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+  updateActor(player, movement, keys.sprint);
 
-  game.streak = 0;
-  updateHud();
-  if (game.shotsLeft <= 0) {
-    const needed = getCurrentLevel().targetMakes;
-    if (game.makesThisLevel >= needed) {
-      window.setTimeout(levelUp, 700);
-    } else {
-      endGame("Out of shots");
+  if (player.hasBall && keys.shoot && player.onGround) {
+    player.shotCharge = clamp(player.shotCharge + 0.022, 0, 1);
+    maybeStartPlayerShot();
+  } else if (player.hasBall && !keys.shoot) {
+    player.shotCharge *= 0.84;
+  }
+}
+
+function updateCpu() {
+  const level = currentLevel();
+  let movement = 0;
+  let sprinting = false;
+
+  if (cpu.hasBall) {
+    const targetX = clamp(HOOP.x - 180 - Math.sin(game.lastTime * 0.0014) * 40, 420, 720);
+    if (Math.abs(cpu.x - targetX) > 12) {
+      movement = cpu.x < targetX ? 1 : -1;
+      sprinting = Math.abs(cpu.x - targetX) > 80;
     }
-    return;
+
+    const openLook = Math.abs(cpu.x - player.x) > 86 || player.blockTimer === 0;
+    if (openLook) {
+      cpu.shotCharge = clamp(cpu.shotCharge + level.reaction, 0, 1);
+      const desired = desiredChargeForDistance(Math.abs(HOOP.x - cpu.x));
+      if (cpu.shotCharge >= desired && game.cpuShotCooldown <= 0) {
+        shootBall(cpu, player);
+        cpu.shotCharge = 0;
+        game.cpuShotCooldown = 50;
+      }
+    } else {
+      cpu.shotCharge *= 0.85;
+    }
+  } else {
+    cpu.shotCharge *= 0.78;
+    const guardX = clamp(player.x + 38, 240, 740);
+    if (Math.abs(cpu.x - guardX) > 10) {
+      movement = cpu.x < guardX ? 1 : -1;
+      sprinting = Math.abs(cpu.x - guardX) > 72;
+    }
+
+    if (player.hasBall && Math.abs(cpu.x - player.x) < 42 && Math.random() < level.stealRate && cpu.stealCooldown <= 0) {
+      attemptSteal(cpu, player);
+    }
+
+    if (player.hasBall && player.chargeLocked && Math.abs(cpu.x - player.x) < 60 && cpu.onGround) {
+      jump(cpu, 8.5);
+    }
   }
 
-  setMessage("Almost! Aim a little higher or stronger.");
-  nextShotAfterDelay();
+  if (game.cpuShotCooldown > 0) {
+    game.cpuShotCooldown -= 1;
+  }
+
+  updateActor(cpu, movement, sprinting);
+}
+
+function updateLooseBall() {
+  const nearest = Math.abs(ball.x - player.x) < Math.abs(ball.x - cpu.x) ? player : cpu;
+  if (ball.y + ball.radius >= FLOOR_Y && Math.abs(ball.x - nearest.x) < 34) {
+    game.possession = nearest.type;
+    holdBall(nearest.type);
+    setMessage(nearest.type === "player" ? "Rebound! Your ball." : "CPU rebound.");
+  }
 }
 
 function updateBall() {
-  if (ball.resting) {
+  if (ball.mode === "held") {
+    attachBallToHolder();
+
+    if (Math.abs((keys.right ? 1 : 0) - (keys.left ? 1 : 0)) > 0 && player.hasBall && game.dribbleTimer <= 0 && player.onGround) {
+      playBounceSound(2.8);
+      game.dribbleTimer = 16;
+    }
     return;
   }
 
-  const level = getCurrentLevel();
-  const backboardLeft = hoop.x + 46;
-  const backboardRight = backboardLeft + hoop.backboardWidth;
-  const backboardTop = hoop.y - hoop.backboardHeight / 2;
-  const backboardBottom = hoop.y + hoop.backboardHeight / 2;
-  const rimLeft = hoop.x - hoop.rimRadius + 8;
-  const rimRight = hoop.x + hoop.rimRadius - 8;
-  const rimY = hoop.y + 4;
-
-  ball.prevX = ball.x;
-  ball.prevY = ball.y;
-
-  ball.vx += level.wind;
-  ball.vy += 0.22;
   ball.x += ball.vx;
   ball.y += ball.vy;
-  ball.rotation += ball.vx * 0.04;
+  ball.vy += BALL_GRAVITY;
 
   if (
-    ball.vx > 0 &&
-    ball.x + BALL_RADIUS >= backboardLeft &&
-    ball.prevX + BALL_RADIUS <= backboardLeft &&
-    ball.y + BALL_RADIUS >= backboardTop &&
-    ball.y - BALL_RADIUS <= backboardBottom
+    !ball.justHitBackboard &&
+    ball.x + ball.radius >= HOOP.backboardX &&
+    ball.x - ball.radius <= HOOP.backboardX + HOOP.backboardWidth &&
+    ball.y >= HOOP.backboardTop &&
+    ball.y <= HOOP.backboardTop + HOOP.backboardHeight
   ) {
-    ball.x = backboardLeft - BALL_RADIUS;
-    ball.vx = -Math.abs(ball.vx) * 0.42;
-    ball.vy = Math.max(ball.vy * 0.72 + 0.9, -1.2);
-  } else if (
-    ball.vx < 0 &&
-    ball.x - BALL_RADIUS <= backboardRight &&
-    ball.prevX - BALL_RADIUS >= backboardRight &&
-    ball.y + BALL_RADIUS >= backboardTop &&
-    ball.y - BALL_RADIUS <= backboardBottom
-  ) {
-    ball.x = backboardRight + BALL_RADIUS;
-    ball.vx = Math.abs(ball.vx) * 0.42;
-    ball.vy = Math.max(ball.vy * 0.72 + 0.9, -1.2);
+    ball.justHitBackboard = true;
+    ball.x = HOOP.backboardX - ball.radius;
+    ball.vx = -Math.abs(ball.vx) * 0.48;
+    ball.vy = ball.vy * 0.7 + 0.8;
   }
 
-  // Count a basket when the ball drops through the rim opening from above.
+  const rimLeft = HOOP.x - HOOP.rimRadius + 4;
+  const rimRight = HOOP.x + HOOP.rimRadius - 4;
   if (
-    !game.justScored &&
+    !ball.scored &&
     ball.vy > 0 &&
-    ball.prevY <= rimY &&
-    ball.y >= rimY &&
+    ball.y > HOOP.rimY &&
+    ball.y < HOOP.rimY + HOOP.netHeight &&
     ball.x > rimLeft &&
     ball.x < rimRight
   ) {
-    registerScore();
-  }
-
-  if (ball.x > hoop.x - hoop.rimRadius - BALL_RADIUS && ball.x < hoop.x - 20 && Math.abs(ball.y - hoop.y) < 10) {
-    ball.vx = -Math.abs(ball.vx) * 0.9;
-    ball.vy *= 0.75;
-    if (game.rimSoundTimer <= 0) {
-      playRimSound();
-      game.rimSoundTimer = 8;
-    }
-  }
-
-  if (ball.x > hoop.x + 20 && ball.x < hoop.x + hoop.rimRadius + BALL_RADIUS && Math.abs(ball.y - hoop.y) < 10) {
-    ball.vx = Math.abs(ball.vx) * 0.9;
-    ball.vy *= 0.75;
-    if (game.rimSoundTimer <= 0) {
-      playRimSound();
-      game.rimSoundTimer = 8;
-    }
-  }
-
-  if (ball.y + BALL_RADIUS >= FLOOR_Y) {
-    const impactSpeed = Math.abs(ball.vy);
-    ball.y = FLOOR_Y - BALL_RADIUS;
-    ball.vy *= -0.38;
-    ball.vx *= 0.72;
-    playBounceSound(impactSpeed);
-
-    if (Math.abs(ball.vy) < 1.5) {
-      missShot();
-      resetBall();
-    }
-  }
-
-  if (ball.x < -50 || ball.x > WIDTH + 50 || ball.y > HEIGHT + 80) {
-    missShot();
-    resetBall();
-  }
-}
-
-function updateHoop() {
-  const level = getCurrentLevel();
-  if (!level.move || game.state !== "playing") {
-    hoop.x = hoop.baseX;
+    ball.scored = true;
+    awardScore(game.pendingShot?.shooter || game.possession);
     return;
   }
 
-  hoop.x += level.move * hoop.direction;
-  const maxOffset = 48;
-  if (hoop.x > hoop.baseX + maxOffset || hoop.x < hoop.baseX - maxOffset) {
-    hoop.direction *= -1;
+  const leftRim = HOOP.x - HOOP.rimRadius;
+  const rightRim = HOOP.x + HOOP.rimRadius;
+  const rimDistanceLeft = Math.hypot(ball.x - leftRim, ball.y - HOOP.rimY);
+  const rimDistanceRight = Math.hypot(ball.x - rightRim, ball.y - HOOP.rimY);
+  if ((rimDistanceLeft < ball.radius + 4 || rimDistanceRight < ball.radius + 4) && game.rimSoundTimer <= 0) {
+    ball.vx *= -0.82;
+    ball.vy *= 0.78;
+    playRimBang();
+    game.rimSoundTimer = 8;
+  }
+
+  if (ball.y + ball.radius >= FLOOR_Y) {
+    const impact = Math.abs(ball.vy);
+    ball.y = FLOOR_Y - ball.radius;
+    ball.vy *= -0.46;
+    ball.vx *= 0.76;
+    ball.bounceCount += 1;
+    playBounceSound(impact);
+
+    if (Math.abs(ball.vy) < 1.5 || ball.bounceCount > 4) {
+      ball.vy = 0;
+      ball.mode = "loose";
+    }
+  }
+
+  if (ball.x < 40 || ball.x > WIDTH - 30 || ball.y > HEIGHT + 40) {
+    const fallback = game.pendingShot?.shooter === "player" ? "cpu" : "player";
+    resetLevel(fallback);
+  }
+
+  if (ball.mode === "loose") {
+    updateLooseBall();
   }
 }
 
-function updateCelebration() {
-  if (hoop.netSwing > 0.2) {
-    hoop.netSwing *= 0.85;
-  } else {
-    hoop.netSwing = 0;
+function updateDefenseActions() {
+  if (!controls.defendWasDown && keys.defend) {
+    if (player.hasBall) {
+      setMessage("Protect the ball and create space.");
+    } else {
+      if (player.onGround) {
+        jump(player, 8.7);
+      }
+      attemptSteal(player, cpu);
+    }
   }
 
-  if (hoop.scoreFlashTimer > 0) {
-    hoop.scoreFlashTimer -= 1;
+  if (!controls.shootWasDown && keys.shoot && !player.hasBall && player.onGround) {
+    jump(player, 8.4);
   }
 
+  if (controls.shootWasDown && !keys.shoot) {
+    maybeReleasePlayerShot();
+  }
+
+  controls.shootWasDown = keys.shoot;
+  controls.defendWasDown = keys.defend;
+}
+
+function updateGame() {
+  if (game.state !== "playing") {
+    return;
+  }
+
+  updatePlayer();
+  updateCpu();
+  updateDefenseActions();
+  updateBall();
+
+  if (game.dribbleTimer > 0) {
+    game.dribbleTimer -= 1;
+  }
   if (game.rimSoundTimer > 0) {
     game.rimSoundTimer -= 1;
+  }
+  if (game.bannerTimer > 0) {
+    game.bannerTimer -= 1;
   }
 }
 
 function drawBackground() {
-  const gradient = ctx.createLinearGradient(0, 0, 0, HEIGHT);
-  gradient.addColorStop(0, "#455a73");
-  gradient.addColorStop(0.45, "#62748b");
-  gradient.addColorStop(0.46, "#d7dde5");
-  gradient.addColorStop(1, "#bdc7d3");
-  ctx.fillStyle = gradient;
+  const sky = ctx.createLinearGradient(0, 0, 0, HEIGHT);
+  sky.addColorStop(0, "#09111b");
+  sky.addColorStop(0.45, "#16253a");
+  sky.addColorStop(1, "#556472");
+  ctx.fillStyle = sky;
   ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
-  ctx.fillStyle = "#31455c";
-  ctx.fillRect(0, 0, WIDTH, 84);
-
-  for (let x = 18; x < WIDTH; x += 84) {
-    ctx.fillStyle = "rgba(255, 246, 220, 0.16)";
-    ctx.fillRect(x, 18, 52, 12);
+  ctx.fillStyle = "#0c131d";
+  ctx.fillRect(0, 0, WIDTH, 100);
+  for (let x = 20; x < WIDTH; x += 86) {
+    ctx.fillStyle = "rgba(255, 248, 176, 0.18)";
+    ctx.fillRect(x, 18, 44, 10);
   }
 
-  ctx.fillStyle = "#5e7189";
-  ctx.fillRect(0, 84, WIDTH, 36);
-
   const bleachers = [
-    { x: 0, y: 124, w: 240, h: 146, direction: 1 },
-    { x: 664, y: 144, w: 296, h: 126, direction: -1 }
+    { x: 0, y: 138, w: 250, h: 132, direction: 1 },
+    { x: 650, y: 154, w: 310, h: 118, direction: -1 }
   ];
 
   bleachers.forEach((section) => {
-    ctx.fillStyle = "#a51f2a";
+    ctx.fillStyle = "#474f5d";
     ctx.beginPath();
     if (section.direction === 1) {
       ctx.moveTo(section.x, section.y);
@@ -549,7 +808,7 @@ function drawBackground() {
     ctx.closePath();
     ctx.fill();
 
-    ctx.strokeStyle = "rgba(255,255,255,0.22)";
+    ctx.strokeStyle = "rgba(255,255,255,0.14)";
     ctx.lineWidth = 2;
     for (let row = 0; row < 7; row += 1) {
       const t = row / 6;
@@ -571,14 +830,14 @@ function drawBackground() {
         const px = section.direction === 1
           ? section.x + 18 + seat * 18 + offset
           : section.x + section.w - 28 - seat * 18 - offset;
-        const py = section.y + 18 + row * 24;
-        ctx.fillStyle = "#7e121b";
+        const py = section.y + 20 + row * 23;
+        ctx.fillStyle = "#272d34";
         ctx.fillRect(px, py, 12, 10);
-        ctx.fillStyle = ["#f2c6a8", "#d99a73", "#8f5b3f", "#f6d6bf"][(row + seat) % 4];
+        ctx.fillStyle = ["#f1c8ab", "#d79870", "#8f6044", "#f6dcc8"][(row + seat) % 4];
         ctx.beginPath();
         ctx.arc(px + 6, py - 5, 4, 0, Math.PI * 2);
         ctx.fill();
-        ctx.strokeStyle = "#243445";
+        ctx.strokeStyle = "#10161f";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(px + 6, py);
@@ -587,343 +846,317 @@ function drawBackground() {
       }
     }
   });
-
-  ctx.fillStyle = "#44566d";
-  ctx.fillRect(246, 140, 150, 120);
-  ctx.fillStyle = "#1b2330";
-  ctx.fillRect(254, 148, 134, 104);
-
-  for (let y = 132; y < FLOOR_Y - 34; y += 44) {
-    ctx.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(WIDTH, y);
-    ctx.stroke();
-  }
-
-  ctx.fillStyle = "rgba(26, 36, 48, 0.22)";
-  for (let x = 0; x < WIDTH; x += 64) {
-    ctx.fillRect(x, 120, 34, FLOOR_Y - 120);
-  }
-
-  ctx.fillStyle = "rgba(255,255,255,0.08)";
-  ctx.fillRect(0, FLOOR_Y - 26, WIDTH, 26);
 }
 
 function drawCourt() {
-  ctx.fillStyle = "#bb5a2d";
+  const asphalt = ctx.createLinearGradient(0, FLOOR_Y, 0, HEIGHT);
+  asphalt.addColorStop(0, "#31363d");
+  asphalt.addColorStop(1, "#171b1f");
+  ctx.fillStyle = asphalt;
   ctx.fillRect(0, FLOOR_Y, WIDTH, HEIGHT - FLOOR_Y);
 
-  const woodGradient = ctx.createLinearGradient(0, FLOOR_Y, 0, HEIGHT);
-  woodGradient.addColorStop(0, "#d9894f");
-  woodGradient.addColorStop(1, "#a95228");
-  ctx.fillStyle = woodGradient;
-  ctx.fillRect(0, FLOOR_Y, WIDTH, HEIGHT - FLOOR_Y);
-
-  for (let x = 0; x < WIDTH; x += 120) {
-    ctx.fillStyle = x % 240 === 0 ? "rgba(255, 214, 160, 0.18)" : "rgba(120, 58, 26, 0.12)";
-    ctx.fillRect(x, FLOOR_Y, 60, HEIGHT - FLOOR_Y);
+  for (let i = 0; i < 160; i += 1) {
+    const x = (i * 53) % WIDTH;
+    const y = FLOOR_Y + ((i * 41) % (HEIGHT - FLOOR_Y));
+    ctx.fillStyle = i % 3 === 0 ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.08)";
+    ctx.fillRect(x, y, 3, 3);
   }
 
-  ctx.fillStyle = "rgba(162, 74, 34, 0.95)";
+  ctx.fillStyle = "#0d1014";
   ctx.fillRect(0, FLOOR_Y, WIDTH, 8);
 
-  ctx.strokeStyle = "rgba(255, 248, 230, 0.86)";
+  ctx.strokeStyle = "rgba(255, 225, 134, 0.94)";
   ctx.lineWidth = 4;
-
   ctx.beginPath();
   ctx.moveTo(0, FLOOR_Y);
   ctx.lineTo(WIDTH, FLOOR_Y);
   ctx.stroke();
 
   ctx.beginPath();
-  ctx.arc(230, FLOOR_Y, 108, Math.PI, 0);
+  ctx.rect(0, FLOOR_Y - 144, 162, 144);
   ctx.stroke();
 
   ctx.beginPath();
-  ctx.arc(230, FLOOR_Y, 20, 0, Math.PI * 2);
+  ctx.arc(162, FLOOR_Y, 68, Math.PI / 2, Math.PI * 1.5);
   ctx.stroke();
 
   ctx.beginPath();
-  ctx.rect(0, FLOOR_Y - 150, 170, 150);
+  ctx.moveTo(84, FLOOR_Y - 144);
+  ctx.lineTo(84, FLOOR_Y);
   ctx.stroke();
 
   ctx.beginPath();
-  ctx.arc(170, FLOOR_Y, 72, Math.PI / 2, Math.PI * 1.5);
+  ctx.arc(212, FLOOR_Y, 108, Math.PI, 0);
   ctx.stroke();
 
   ctx.beginPath();
-  ctx.moveTo(90, FLOOR_Y - 150);
-  ctx.lineTo(90, FLOOR_Y);
+  ctx.arc(212, FLOOR_Y, 18, 0, Math.PI * 2);
   ctx.stroke();
 
+  ctx.fillStyle = "rgba(255, 149, 0, 0.1)";
   ctx.beginPath();
-  ctx.arc(WIDTH / 2, FLOOR_Y + 64, 92, Math.PI, Math.PI * 2);
-  ctx.stroke();
+  ctx.arc(212, FLOOR_Y, 108, Math.PI, 0);
+  ctx.fill();
 }
 
 function drawHoop() {
-  const backboardLeft = hoop.x + 46;
-  const backboardTop = hoop.y - hoop.backboardHeight / 2;
-  const flash = hoop.scoreFlashTimer > 0 ? hoop.scoreFlashTimer / 40 : 0;
+  ctx.fillStyle = "#d8dde8";
+  ctx.fillRect(HOOP.backboardX, HOOP.backboardTop, HOOP.backboardWidth, HOOP.backboardHeight);
 
-  ctx.fillStyle = flash > 0 ? `rgba(255, 255, 255, ${0.86 + flash * 0.14})` : "#f8fbff";
-  ctx.fillRect(backboardLeft, backboardTop, hoop.backboardWidth, hoop.backboardHeight);
-
-  ctx.fillStyle = "#d73d2b";
-  ctx.fillRect(hoop.x + 18, hoop.y - 16, 74, 12);
-
-  ctx.strokeStyle = "rgba(220, 70, 50, 0.85)";
+  ctx.strokeStyle = "#d55140";
   ctx.lineWidth = 3;
-  ctx.strokeRect(backboardLeft - 8, backboardTop + 46, 34, 30);
+  ctx.strokeRect(HOOP.backboardX - 8, HOOP.backboardTop + 45, 34, 28);
 
-  ctx.strokeStyle = "#ff5b33";
+  ctx.fillStyle = "#e04f3f";
+  ctx.fillRect(HOOP.x + 18, HOOP.rimY - 14, 72, 10);
+
+  ctx.strokeStyle = "#ff6a3b";
   ctx.lineWidth = 7;
   ctx.beginPath();
-  ctx.moveTo(hoop.x - hoop.rimRadius, hoop.y);
-  ctx.lineTo(hoop.x + hoop.rimRadius, hoop.y);
+  ctx.moveTo(HOOP.x - HOOP.rimRadius, HOOP.rimY);
+  ctx.lineTo(HOOP.x + HOOP.rimRadius, HOOP.rimY);
   ctx.stroke();
 
-  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.strokeStyle = "rgba(255,255,255,0.92)";
   ctx.lineWidth = 2;
-  const swing = hoop.netSwing;
-  for (let i = -36; i <= 36; i += 18) {
-    const sway = (i / 18) * swing * 0.5;
+  for (let i = -30; i <= 30; i += 15) {
+    const sway = Math.sin(game.lastTime * 0.02 + i) * 1.5;
     ctx.beginPath();
-    ctx.moveTo(hoop.x + i, hoop.y + 3);
-    ctx.lineTo(hoop.x + i * 0.25 + sway, hoop.y + hoop.netHeight);
+    ctx.moveTo(HOOP.x + i, HOOP.rimY + 3);
+    ctx.lineTo(HOOP.x + i * 0.2 + sway, HOOP.rimY + HOOP.netHeight);
     ctx.stroke();
   }
 
   ctx.beginPath();
-  ctx.moveTo(hoop.x - 34 + swing * 0.2, hoop.y + 18);
-  ctx.lineTo(hoop.x + 34 + swing * 0.2, hoop.y + 18);
+  ctx.moveTo(HOOP.x - 30, HOOP.rimY + 18);
+  ctx.lineTo(HOOP.x + 30, HOOP.rimY + 18);
   ctx.stroke();
+}
+
+function drawActor(actor) {
+  const blinkOffset = actor.blinkTimer > 0 ? Math.sin(game.lastTime * 0.3) * 3 : 0;
+  const topY = actor.y - actor.height - blinkOffset;
+
+  ctx.fillStyle = actor.color;
+  ctx.beginPath();
+  ctx.arc(actor.x, topY + 16, 16, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.lineWidth = 10;
+  ctx.strokeStyle = actor.color;
+  ctx.beginPath();
+  ctx.moveTo(actor.x, topY + 32);
+  ctx.lineTo(actor.x, topY + 72);
+  ctx.moveTo(actor.x, topY + 42);
+  ctx.lineTo(actor.x - 18, topY + 58);
+  ctx.moveTo(actor.x, topY + 42);
+  ctx.lineTo(actor.x + 18, topY + 54);
+  ctx.moveTo(actor.x, topY + 72);
+  ctx.lineTo(actor.x - 14, topY + 106);
+  ctx.moveTo(actor.x, topY + 72);
+  ctx.lineTo(actor.x + 18, topY + 106);
+  ctx.stroke();
+
+  if (actor.type === "player") {
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.font = "bold 13px Trebuchet MS";
+    ctx.textAlign = "center";
+    ctx.fillText("YOU", actor.x, topY - 8);
+  } else {
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.font = "bold 13px Trebuchet MS";
+    ctx.textAlign = "center";
+    ctx.fillText("CPU", actor.x, topY - 8);
+  }
 }
 
 function drawBall() {
   ctx.save();
   ctx.translate(ball.x, ball.y);
-  ctx.rotate(ball.rotation);
-
-  ctx.fillStyle = "#ff8c2b";
+  ctx.rotate(ball.x * 0.03);
+  ctx.fillStyle = "#ff8a2b";
   ctx.beginPath();
-  ctx.arc(0, 0, BALL_RADIUS, 0, Math.PI * 2);
+  ctx.arc(0, 0, ball.radius, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.strokeStyle = "#8a3d00";
+  ctx.strokeStyle = "#6d3200";
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.arc(0, 0, BALL_RADIUS, 0, Math.PI * 2);
-  ctx.moveTo(-BALL_RADIUS, 0);
-  ctx.lineTo(BALL_RADIUS, 0);
-  ctx.moveTo(0, -BALL_RADIUS);
-  ctx.lineTo(0, BALL_RADIUS);
-  ctx.moveTo(-11, -11);
-  ctx.quadraticCurveTo(0, 0, -11, 11);
-  ctx.moveTo(11, -11);
-  ctx.quadraticCurveTo(0, 0, 11, 11);
+  ctx.arc(0, 0, ball.radius, 0, Math.PI * 2);
+  ctx.moveTo(-ball.radius, 0);
+  ctx.lineTo(ball.radius, 0);
+  ctx.moveTo(0, -ball.radius);
+  ctx.lineTo(0, ball.radius);
+  ctx.moveTo(-9, -9);
+  ctx.quadraticCurveTo(0, 0, -9, 9);
+  ctx.moveTo(9, -9);
+  ctx.quadraticCurveTo(0, 0, 9, 9);
   ctx.stroke();
   ctx.restore();
 }
 
-function drawPlayerMarker() {
-  ctx.fillStyle = "#2d6cdf";
-  ctx.beginPath();
-  ctx.arc(120, FLOOR_Y - 44, 18, 0, Math.PI * 2);
-  ctx.fill();
+function drawShotMeter() {
+  if (!player.hasBall) {
+    return;
+  }
 
-  ctx.strokeStyle = "#2d6cdf";
-  ctx.lineWidth = 10;
+  const meterX = 170;
+  const meterY = 120;
+  const meterW = 26;
+  const meterH = 176;
+  const ideal = desiredChargeForDistance(Math.abs(HOOP.x - player.x));
+
+  ctx.fillStyle = "rgba(0,0,0,0.34)";
+  ctx.fillRect(meterX, meterY, meterW, meterH);
+  ctx.fillStyle = "#27d17c";
+  ctx.fillRect(meterX + 4, meterY + meterH - player.shotCharge * (meterH - 8) - 4, meterW - 8, player.shotCharge * (meterH - 8));
+
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(meterX, meterY, meterW, meterH);
+
+  const idealY = meterY + meterH - ideal * (meterH - 8) - 4;
+  ctx.strokeStyle = "#ffea6a";
   ctx.beginPath();
-  ctx.moveTo(120, FLOOR_Y - 26);
-  ctx.lineTo(120, FLOOR_Y + 10);
-  ctx.moveTo(120, FLOOR_Y - 8);
-  ctx.lineTo(98, FLOOR_Y + 10);
-  ctx.moveTo(120, FLOOR_Y - 8);
-  ctx.lineTo(148, FLOOR_Y - 24);
-  ctx.moveTo(120, FLOOR_Y + 10);
-  ctx.lineTo(102, FLOOR_Y + 42);
-  ctx.moveTo(120, FLOOR_Y + 10);
-  ctx.lineTo(140, FLOOR_Y + 42);
+  ctx.moveTo(meterX - 4, idealY);
+  ctx.lineTo(meterX + meterW + 4, idealY);
   ctx.stroke();
+
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.font = "bold 12px Trebuchet MS";
+  ctx.textAlign = "left";
+  ctx.fillText("SHOT", meterX - 6, meterY - 12);
 }
 
-function drawAimGuide() {
-  if (!game.dragging || !game.dragPoint) {
+function drawBanner() {
+  if (game.bannerTimer <= 0) {
     return;
   }
 
-  ctx.strokeStyle = "rgba(22, 50, 79, 0.75)";
-  ctx.lineWidth = 3;
-  ctx.setLineDash([8, 8]);
-  ctx.beginPath();
-  ctx.moveTo(ball.x, ball.y);
-  ctx.lineTo(game.dragPoint.x, game.dragPoint.y);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  const level = getCurrentLevel();
-  if (!level.guide) {
-    return;
-  }
-
-  const dx = game.dragPoint.x - ball.x;
-  const dy = game.dragPoint.y - ball.y;
-  const power = clamp(Math.hypot(dx, dy), 30, 170);
-  let guideX = ball.x;
-  let guideY = ball.y;
-  let guideVx = dx * 0.14;
-  let guideVy = dy * 0.14;
-
-  ctx.fillStyle = "rgba(255,255,255,0.85)";
-  for (let i = 0; i < 24; i += 1) {
-    guideVx += level.wind;
-    guideVy += 0.22;
-    guideX += guideVx;
-    guideY += guideVy;
-    if (guideY > FLOOR_Y) {
-      break;
-    }
-    ctx.beginPath();
-    ctx.arc(guideX, guideY, 3, 0, Math.PI * 2);
-    ctx.fill();
-  }
-}
-
-function drawLevelBanner() {
-  if (game.levelBannerTimer <= 0 || game.state !== "playing") {
-    return;
-  }
-
-  ctx.save();
-  ctx.globalAlpha = Math.min(game.levelBannerTimer / 120, 1);
-  ctx.fillStyle = "rgba(255, 248, 234, 0.9)";
-  ctx.fillRect(WIDTH / 2 - 175, 42, 350, 56);
-  ctx.fillStyle = "#16324f";
-  ctx.font = "bold 28px Trebuchet MS";
-  ctx.textAlign = "center";
-  ctx.fillText(`Level ${game.levelIndex + 1}`, WIDTH / 2, 78);
-  ctx.restore();
-}
-
-function drawScoreFlash() {
-  if (hoop.scoreFlashTimer <= 0) {
-    return;
-  }
-
-  const alpha = hoop.scoreFlashTimer / 40;
+  const alpha = Math.min(game.bannerTimer / 60, 1);
   ctx.save();
   ctx.globalAlpha = alpha;
-  ctx.fillStyle = "#fff8d8";
-  ctx.beginPath();
-  ctx.arc(hoop.x, hoop.y + 22, 52 - alpha * 10, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = "#16324f";
-  ctx.font = "bold 26px Trebuchet MS";
+  ctx.fillStyle = "rgba(12, 16, 22, 0.82)";
+  ctx.fillRect(WIDTH / 2 - 175, 36, 350, 54);
+  ctx.fillStyle = "#fff0bd";
+  ctx.font = "bold 28px Trebuchet MS";
   ctx.textAlign = "center";
-  ctx.fillText("SWISH!", hoop.x, hoop.y - 26);
+  ctx.fillText(game.bannerText, WIDTH / 2, 70);
   ctx.restore();
+}
+
+function drawControlHints() {
+  ctx.fillStyle = "rgba(8, 12, 18, 0.76)";
+  ctx.fillRect(20, 124, 132, 238);
+  ctx.strokeStyle = "rgba(255, 220, 140, 0.45)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(20, 124, 132, 238);
+
+  ctx.fillStyle = "#fff0bd";
+  ctx.font = "bold 16px Trebuchet MS";
+  ctx.textAlign = "left";
+  ctx.fillText("Controls", 34, 152);
+
+  ctx.font = "bold 13px Trebuchet MS";
+  ctx.fillStyle = "rgba(255,255,255,0.92)";
+  ctx.fillText("A / D  Move", 34, 184);
+  ctx.fillText("Shift  Sprint", 34, 212);
+  ctx.fillText("Space  Shoot", 34, 240);
+  ctx.fillText("Space  Jump", 34, 268);
+  ctx.fillText("S  Steal / Block", 34, 296);
+
+  ctx.fillStyle = "#ffa14a";
+  ctx.fillText("On offense:", 34, 330);
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.fillText("dribble, run,", 34, 350);
+  ctx.fillText("create space,", 34, 368);
+  ctx.fillText("then shoot.", 34, 386);
+  ctx.fillStyle = "#5bd3ff";
+  ctx.fillText("On defense:", 34, 414);
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.fillText("jump to contest", 34, 434);
+  ctx.fillText("or press S", 34, 452);
+  ctx.fillText("to steal.", 34, 470);
 }
 
 function render() {
   drawBackground();
   drawCourt();
   drawHoop();
-  drawScoreFlash();
-  drawPlayerMarker();
-  drawAimGuide();
+  drawShotMeter();
+  drawActor(player);
+  drawActor(cpu);
   drawBall();
-  drawLevelBanner();
+  drawBanner();
+  drawControlHints();
 }
 
 function frame(timestamp) {
-  const delta = timestamp - game.lastTime;
   game.lastTime = timestamp;
-
-  if (game.levelBannerTimer > 0) {
-    game.levelBannerTimer -= delta / 16.67;
-  }
-
-  updateHoop();
-  updateCelebration();
-  updateBall();
+  updateGame();
   render();
   window.requestAnimationFrame(frame);
 }
 
-function getCanvasPoint(event) {
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = WIDTH / rect.width;
-  const scaleY = HEIGHT / rect.height;
-  return {
-    x: (event.clientX - rect.left) * scaleX,
-    y: (event.clientY - rect.top) * scaleY
-  };
+function handleKeyDown(event) {
+  game.pointerWasUsed = true;
+  if (event.key === "ArrowLeft" || event.key.toLowerCase() === "a") {
+    keys.left = true;
+  }
+  if (event.key === "ArrowRight" || event.key.toLowerCase() === "d") {
+    keys.right = true;
+  }
+  if (event.key === "Shift") {
+    keys.sprint = true;
+  }
+  if (event.key === " ") {
+    keys.shoot = true;
+    event.preventDefault();
+  }
+  if (event.key.toLowerCase() === "s" || event.key.toLowerCase() === "k") {
+    keys.defend = true;
+  }
 }
 
-function beginDrag(event) {
-  if (game.state !== "playing" || !ball.resting) {
-    return;
+function handleKeyUp(event) {
+  if (event.key === "ArrowLeft" || event.key.toLowerCase() === "a") {
+    keys.left = false;
   }
-
-  const point = getCanvasPoint(event);
-  const distance = Math.hypot(point.x - ball.x, point.y - ball.y);
-  if (distance > 55) {
-    return;
+  if (event.key === "ArrowRight" || event.key.toLowerCase() === "d") {
+    keys.right = false;
   }
-
-  game.dragging = true;
-  game.dragPoint = point;
-  game.pointerId = event.pointerId;
-  setMessage("Line up your shot...");
-  canvas.setPointerCapture(event.pointerId);
+  if (event.key === "Shift") {
+    keys.sprint = false;
+  }
+  if (event.key === " ") {
+    keys.shoot = false;
+    event.preventDefault();
+  }
+  if (event.key.toLowerCase() === "s" || event.key.toLowerCase() === "k") {
+    keys.defend = false;
+  }
 }
 
-function moveDrag(event) {
-  if (!game.dragging || game.pointerId !== event.pointerId) {
+function handleOverlayButton() {
+  if (game.state === "menu") {
+    startRun();
     return;
   }
-
-  game.dragPoint = getCanvasPoint(event);
-}
-
-function endDrag(event) {
-  if (!game.dragging || game.pointerId !== event.pointerId) {
+  if (game.state === "level-complete") {
+    overlay.classList.add("hidden");
+    game.state = "playing";
+    startNextLevel();
     return;
   }
-
-  const point = getCanvasPoint(event);
-  game.dragging = false;
-  game.dragPoint = null;
-  shootBall(point.x, point.y);
-  canvas.releasePointerCapture(event.pointerId);
+  if (game.state === "gameover") {
+    startRun();
+  }
 }
 
-function cancelDrag(event) {
-  if (!game.dragging || game.pointerId !== event.pointerId) {
-    return;
-  }
-
-  game.dragging = false;
-  game.dragPoint = null;
-  setMessage("Tap and drag to aim your shot.");
-  canvas.releasePointerCapture(event.pointerId);
-}
-
-overlayButton.addEventListener("click", startGame);
-restartButton.addEventListener("click", startGame);
-canvas.addEventListener("pointerdown", beginDrag);
-canvas.addEventListener("pointermove", moveDrag);
-canvas.addEventListener("pointerup", endDrag);
-canvas.addEventListener("pointercancel", cancelDrag);
-canvas.addEventListener("pointerleave", (event) => {
-  if (game.dragging) {
-    moveDrag(event);
-  }
-});
+overlayButton.addEventListener("click", handleOverlayButton);
+restartButton.addEventListener("click", startRun);
+window.addEventListener("keydown", handleKeyDown);
+window.addEventListener("keyup", handleKeyUp);
 
 updateHud();
 render();
