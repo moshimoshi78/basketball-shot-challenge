@@ -81,7 +81,6 @@ const keys = {
   left: false,
   right: false,
   sprint: false,
-  dribble: false,
   shoot: false,
   defend: false,
   dunk: false
@@ -769,17 +768,7 @@ function updateActor(actor, movement, sprinting) {
   updateEnergy(actor, sprintAllowed, movement);
 
   if (actor.hasBall && game.phase === "live") {
-    const dribbling = actor.type === "player" ? keys.dribble : true;
-    if (dribbling || movement === 0) {
-      actor.dribbleGrace = clamp(actor.dribbleGrace + 2, 0, 40);
-    } else {
-      actor.dribbleGrace -= 1;
-      if (actor.dribbleGrace <= 0) {
-        const other = actor.type === "player" ? "cpu" : "player";
-        forcePossession(other, actor.type === "player" ? "Travel / carry. CPU ball at the arc." : "CPU lost the dribble. Your ball at the arc.");
-        return;
-      }
-    }
+    actor.dribbleGrace = clamp(actor.dribbleGrace + 2, 0, 40);
   } else {
     actor.dribbleGrace = clamp(actor.dribbleGrace + 1, 0, 40);
   }
@@ -1381,7 +1370,7 @@ function drawCoachPanel() {
   ctx.fillStyle = "rgba(255,255,255,0.92)";
   ctx.fillText("A / D  Move", 34, 182);
   ctx.fillText("Shift  Sprint", 34, 208);
-  ctx.fillText("F  Dribble", 34, 234);
+  ctx.fillText("Auto dribble", 34, 234);
   ctx.fillText("Space  Shoot / Jump", 34, 260);
   ctx.fillText("S  Steal / Block", 34, 286);
   ctx.fillText("E  Dunk", 34, 312);
@@ -1389,7 +1378,7 @@ function drawCoachPanel() {
   ctx.fillStyle = "#ffa14a";
   ctx.fillText("Offense:", 34, 346);
   ctx.fillStyle = "rgba(255,255,255,0.9)";
-  ctx.fillText("hold F to dribble,", 34, 366);
+  ctx.fillText("run the floor,", 34, 366);
   ctx.fillText("use E near the rim", 34, 384);
   ctx.fillText("and time the bar.", 34, 402);
 
@@ -1443,9 +1432,6 @@ function handleKeyDown(event) {
   if (event.key === "Shift") {
     keys.sprint = true;
   }
-  if (event.key.toLowerCase() === "f") {
-    keys.dribble = true;
-  }
   if (event.key === " ") {
     keys.shoot = true;
     event.preventDefault();
@@ -1467,9 +1453,6 @@ function handleKeyUp(event) {
   }
   if (event.key === "Shift") {
     keys.sprint = false;
-  }
-  if (event.key.toLowerCase() === "f") {
-    keys.dribble = false;
   }
   if (event.key === " ") {
     keys.shoot = false;
