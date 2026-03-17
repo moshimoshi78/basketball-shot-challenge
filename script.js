@@ -490,7 +490,14 @@ function releaseCheckBall() {
 }
 
 function desiredChargeForDistance(distance) {
-  return clamp(0.56 + distance / 1600, 0.56, 0.72);
+  return 0.62;
+}
+
+function shotPointsFor(distance, isDunk = false) {
+  if (isDunk) {
+    return 2;
+  }
+  return distance > 250 ? 3 : 2;
 }
 
 function jump(actor, power = 8.6) {
@@ -507,12 +514,12 @@ function shootBall(shooter, defender) {
   const distance = Math.abs(attackHoop.x - shooter.x);
   const targetCharge = desiredChargeForDistance(distance);
   const releaseValue = Math.max(shooter.shotCharge, 0.18);
-  const timingScore = 1 - Math.abs(releaseValue - targetCharge) * 1.35;
+  const timingScore = 1 - Math.abs(releaseValue - targetCharge) * 1.05;
   const contestDistance = Math.abs(defender.x - shooter.x);
   const contestPenalty = contestDistance < 56 ? currentLevel().contest * (defender.blockTimer > 0 ? 1.08 : 0.82) : 0;
   const distancePenalty = clamp((distance - 180) / 560, 0, 0.36);
   const baseSkill = shooter.type === "cpu" ? currentLevel().shotSkill : 0.6;
-  const makeChance = clamp(baseSkill + timingScore * 0.34 - contestPenalty - distancePenalty, 0.16, 0.94);
+  const makeChance = clamp(baseSkill + timingScore * 0.4 - contestPenalty - distancePenalty, 0.2, 0.95);
   const made = Math.random() < makeChance;
 
   shooter.hasBall = false;
@@ -522,6 +529,7 @@ function shootBall(shooter, defender) {
   game.pendingShot = {
     shooter: shooter.type,
     hoop: attackHoop.side,
+    points: shotPointsFor(distance, false),
     made,
     counted: false
   };
@@ -566,6 +574,7 @@ function performDunk(shooter, defender) {
   game.pendingShot = {
     shooter: shooter.type,
     hoop: hoop.side,
+    points: 2,
     made,
     counted: false,
     dunk: true
@@ -622,13 +631,14 @@ function awardScore(team) {
   }
 
   game.pendingShot.counted = true;
+  const points = game.pendingShot.points || 2;
 
   if (team === "player") {
-    game.playerScore += 1;
-    setMessage("Bucket! You scored.");
+    game.playerScore += points;
+    setMessage(points === 3 ? "Splash! That's 3." : "Bucket! That's 2.");
   } else {
-    game.cpuScore += 1;
-    setMessage("CPU scored.");
+    game.cpuScore += points;
+    setMessage(points === 3 ? "CPU hits a 3." : "CPU scores 2.");
   }
 
   playSwish();
