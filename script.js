@@ -125,6 +125,7 @@ const ball = {
   radius: BALL_RADIUS,
   mode: "held",
   holder: "player",
+  lastTouchedBy: "player",
   bounceCount: 0,
   scored: false,
   justHitBackboard: false
@@ -359,6 +360,7 @@ function attachBallToHolder() {
 function holdBall(holderName) {
   ball.mode = "held";
   ball.holder = holderName;
+  ball.lastTouchedBy = holderName;
   ball.vx = 0;
   ball.vy = 0;
   ball.scored = false;
@@ -484,7 +486,7 @@ function releaseCheckBall() {
 }
 
 function desiredChargeForDistance(distance) {
-  return 0.68;
+  return clamp(0.56 + distance / 1600, 0.56, 0.72);
 }
 
 function jump(actor, power = 8.6) {
@@ -500,7 +502,8 @@ function shootBall(shooter, defender) {
   const attackHoop = offensiveHoopFor(shooter.type);
   const distance = Math.abs(attackHoop.x - shooter.x);
   const targetCharge = desiredChargeForDistance(distance);
-  const timingScore = 1 - Math.abs(shooter.shotCharge - targetCharge) * 1.55;
+  const releaseValue = Math.max(shooter.shotCharge, 0.18);
+  const timingScore = 1 - Math.abs(releaseValue - targetCharge) * 1.35;
   const contestDistance = Math.abs(defender.x - shooter.x);
   const contestPenalty = contestDistance < 56 ? currentLevel().contest * (defender.blockTimer > 0 ? 1.08 : 0.82) : 0;
   const distancePenalty = clamp((distance - 180) / 560, 0, 0.36);
@@ -511,6 +514,7 @@ function shootBall(shooter, defender) {
   shooter.hasBall = false;
   shooter.shotCharge = 0;
   shooter.chargeLocked = false;
+  shooter.dribbleGrace = 40;
   game.pendingShot = {
     shooter: shooter.type,
     hoop: attackHoop.side,
@@ -530,6 +534,7 @@ function shootBall(shooter, defender) {
 
   ball.mode = "air";
   ball.holder = null;
+  ball.lastTouchedBy = shooter.type;
   ball.x = startX;
   ball.y = startY;
   ball.vx = (targetX - startX) / time;
@@ -544,14 +549,16 @@ function shootBall(shooter, defender) {
 function performDunk(shooter, defender) {
   const hoop = offensiveHoopFor(shooter.type);
   const timingTarget = 0.7;
-  const timingScore = 1 - Math.abs(shooter.dunkCharge - timingTarget) * 2.4;
-  const contestPenalty = Math.abs(defender.x - shooter.x) < 48 && defender.blockTimer > 0 ? currentLevel().contest * 0.6 : 0;
-  const makeChance = clamp(0.72 + timingScore * 0.26 - contestPenalty, 0.18, 0.98);
+  const timingValue = Math.max(shooter.dunkCharge, 0.24);
+  const timingScore = 1 - Math.abs(timingValue - timingTarget) * 1.65;
+  const contestPenalty = Math.abs(defender.x - shooter.x) < 48 && defender.blockTimer > 0 ? currentLevel().contest * 0.68 : 0;
+  const makeChance = clamp(0.8 + timingScore * 0.22 - contestPenalty, 0.25, 0.99);
   const made = Math.random() < makeChance;
 
   shooter.hasBall = false;
   shooter.dunkCharge = 0;
   shooter.dunkReady = false;
+  shooter.dribbleGrace = 40;
   game.pendingShot = {
     shooter: shooter.type,
     hoop: hoop.side,
@@ -563,10 +570,11 @@ function performDunk(shooter, defender) {
   jump(shooter, 9.4);
   ball.mode = "air";
   ball.holder = null;
+  ball.lastTouchedBy = shooter.type;
   ball.x = shooter.x + shooter.facing * 14;
   ball.y = shooter.y - 48;
-  ball.vx = (hoop.x - ball.x) / 12;
-  ball.vy = (hoop.rimY - 12 - ball.y - 0.5 * BALL_GRAVITY * 12 * 12) / 12;
+  ball.vx = (hoop.x - ball.x) / 10;
+  ball.vy = (hoop.rimY - 6 - ball.y - 0.5 * BALL_GRAVITY * 10 * 10) / 10;
   ball.scored = false;
   ball.justHitBackboard = false;
   ball.bounceCount = 0;
@@ -595,6 +603,7 @@ function maybeBlockShot(defender, shooter) {
   ball.vy = -3.4 - Math.random() * 1.4;
   ball.mode = "loose";
   ball.holder = null;
+  ball.lastTouchedBy = defender.type;
   ball.justHitBackboard = false;
   game.pendingShot = null;
   defender.blockTimer = 0;
@@ -644,6 +653,10 @@ function awardScore(team) {
 function forcePossession(newOffense, reasonText) {
   startCheck(newOffense);
   setMessage(reasonText);
+}
+
+function oppositeTeam(team) {
+  return team === "player" ? "cpu" : "player";
 }
 
 function inKey(actor, hoop) {
@@ -705,6 +718,7 @@ function attemptSteal(attacker, defender) {
   if (Math.random() < successChance) {
     defender.hasBall = false;
     attacker.hasBall = true;
+    ball.lastTouchedBy = attacker.type;
     playBlockSound();
     forcePossession(attacker.type, attacker.type === "player" ? "Steal! Check it up top." : "CPU steal. Check ball.");
   }
@@ -789,6 +803,9 @@ function updatePlayer() {
     player.dunkReady = true;
   } else if (!keys.dunk) {
     player.dunkCharge *= 0.82;
+    if (!closeEnoughToDunk) {
+      player.dunkReady = false;
+    }
   }
 }
 
@@ -807,8 +824,9 @@ function updateCpu() {
 
     if (game.phase === "live") {
       const canDunk = Math.abs(cpu.x - hoop.x) < 84 && cpu.onGround;
-      if (canDunk && Math.random() < 0.012) {
+      if (canDunk && Math.random() < 0.018) {
         cpu.dunkCharge = 0.7;
+        cpu.dunkReady = true;
         performDunk(cpu, player);
       }
       const openLook = Math.abs(cpu.x - player.x) > 86 || player.blockTimer === 0;
@@ -937,8 +955,7 @@ function updateBall() {
   }
 
   if (ball.x < 20 || ball.x > WIDTH - 20 || ball.y > HEIGHT + 40) {
-    const newOffense = game.pendingShot?.shooter === "player" ? "cpu" : "player";
-    forcePossession(newOffense, "Out of bounds. Check ball.");
+    forcePossession(oppositeTeam(ball.lastTouchedBy || game.possession), "Out of bounds. Other team ball at the 3-point line.");
     return;
   }
 
@@ -972,11 +989,18 @@ function handleInputEdges() {
     jump(player, 8.4);
   }
 
-  if (edges.shootWasDown && !keys.shoot && player.hasBall && game.phase === "live" && player.chargeLocked) {
+  if (edges.shootWasDown && !keys.shoot && player.hasBall && game.phase === "live") {
     shootBall(player, cpu);
   }
 
-  if (edges.dunkWasDown && !keys.dunk && player.hasBall && game.phase === "live" && player.dunkReady) {
+  if (
+    edges.dunkWasDown &&
+    !keys.dunk &&
+    player.hasBall &&
+    game.phase === "live" &&
+    player.dunkReady &&
+    Math.abs(player.x - offensiveHoopFor("player").x) < 110
+  ) {
     performDunk(player, cpu);
   }
 
