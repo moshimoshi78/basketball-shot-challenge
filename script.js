@@ -58,6 +58,7 @@ let audioContext = null;
 const game = {
   state: "menu",
   phase: "check",
+  manualCheckOnly: false,
   levelIndex: 0,
   playerScore: 0,
   cpuScore: 0,
@@ -426,10 +427,12 @@ function loseLevel() {
   setMessage("Try again and protect the ball.");
 }
 
-function startCheck(offenseTeam) {
+function startCheck(offenseTeam, options = {}) {
+  const { manualStart = false, message } = options;
   game.possession = offenseTeam;
   game.phase = "check";
-  game.checkTimer = offenseTeam === "cpu" ? 45 : 0;
+  game.manualCheckOnly = manualStart;
+  game.checkTimer = manualStart ? 0 : (offenseTeam === "cpu" ? 45 : 0);
   game.pendingShot = null;
   game.cpuShotCooldown = 0;
   game.rimSoundTimer = 0;
@@ -471,7 +474,7 @@ function startCheck(offenseTeam) {
   game.keyCountPlayer = 0;
   game.keyCountCpu = 0;
   holdBall(offenseTeam);
-  setMessage(`${capitalize(offenseTeam)} ball. Check it from the 3-point line, then attack the ${attackHoop.side} basket.`);
+  setMessage(message || `${capitalize(offenseTeam)} ball. Check it from the 3-point line, then attack the ${attackHoop.side} basket.`);
   updateHud();
 }
 
@@ -479,6 +482,7 @@ function releaseCheckBall() {
   if (game.phase !== "check") {
     return;
   }
+  game.manualCheckOnly = false;
   game.phase = "live";
   game.bannerText = "CHECK!";
   game.bannerTimer = 45;
@@ -651,8 +655,7 @@ function awardScore(team) {
 }
 
 function forcePossession(newOffense, reasonText) {
-  startCheck(newOffense);
-  setMessage(reasonText);
+  startCheck(newOffense, { message: reasonText });
 }
 
 function oppositeTeam(team) {
@@ -955,7 +958,10 @@ function updateBall() {
   }
 
   if (ball.x < 20 || ball.x > WIDTH - 20 || ball.y > HEIGHT + 40) {
-    forcePossession(oppositeTeam(ball.lastTouchedBy || game.possession), "Out of bounds. Other team ball at the 3-point line.");
+    startCheck(oppositeTeam(ball.lastTouchedBy || game.possession), {
+      manualStart: true,
+      message: "Out of bounds. Dead ball. Check it in from the 3-point line."
+    });
     return;
   }
 
@@ -966,7 +972,7 @@ function updateBall() {
 
 function handleInputEdges() {
   if (game.phase === "check") {
-    if (game.possession === "player" && !edges.shootWasDown && keys.shoot) {
+    if (!edges.shootWasDown && keys.shoot) {
       releaseCheckBall();
     }
     edges.shootWasDown = keys.shoot;
