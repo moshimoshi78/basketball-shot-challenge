@@ -4,8 +4,8 @@ const ctx = canvas.getContext("2d");
 const playerScoreValue = document.getElementById("scoreValue");
 const cpuScoreValue = document.getElementById("levelValue");
 const levelValue = document.getElementById("shotsValue");
-const possessionValue = document.getElementById("bestValue");
-const bestLevelValue = document.getElementById("streakValue");
+const shotClockValue = document.getElementById("bestValue");
+const possessionValue = document.getElementById("streakValue");
 const messageText = document.getElementById("messageText");
 const restartButton = document.getElementById("restartButton");
 const overlay = document.getElementById("overlay");
@@ -62,6 +62,9 @@ const game = {
   playerScore: 0,
   cpuScore: 0,
   possession: "player",
+  shotClock: 24 * 60,
+  keyCountPlayer: 0,
+  keyCountCpu: 0,
   checkTimer: 0,
   pendingShot: null,
   rimSoundTimer: 0,
@@ -77,13 +80,16 @@ const keys = {
   left: false,
   right: false,
   sprint: false,
+  dribble: false,
   shoot: false,
-  defend: false
+  defend: false,
+  dunk: false
 };
 
 const edges = {
   shootWasDown: false,
-  defendWasDown: false
+  defendWasDown: false,
+  dunkWasDown: false
 };
 
 function createActor(type, x, color) {
@@ -101,7 +107,10 @@ function createActor(type, x, color) {
     stealCooldown: 0,
     blockTimer: 0,
     blinkTimer: 0,
-    energy: 1
+    energy: 1,
+    dribbleGrace: 40,
+    dunkCharge: 0,
+    dunkReady: false
   };
 }
 
@@ -318,8 +327,8 @@ function updateHud() {
   playerScoreValue.textContent = game.playerScore;
   cpuScoreValue.textContent = game.cpuScore;
   levelValue.textContent = game.levelIndex + 1;
+  shotClockValue.textContent = Math.max(0, Math.ceil(game.shotClock / 60));
   possessionValue.textContent = capitalize(game.possession);
-  bestLevelValue.textContent = game.bestLevel;
 }
 
 function capitalize(value) {
@@ -437,6 +446,9 @@ function startCheck(offenseTeam) {
   offense.hasBall = true;
   offense.chargeLocked = false;
   offense.shotCharge = 0;
+  offense.dunkCharge = 0;
+  offense.dunkReady = false;
+  offense.dribbleGrace = 40;
   offense.blockTimer = 0;
 
   defense.x = checkX + (offenseTeam === "player" ? 86 : -86);
@@ -448,8 +460,14 @@ function startCheck(offenseTeam) {
   defense.hasBall = false;
   defense.chargeLocked = false;
   defense.shotCharge = 0;
+  defense.dunkCharge = 0;
+  defense.dunkReady = false;
+  defense.dribbleGrace = 40;
   defense.blockTimer = 0;
 
+  game.shotClock = 24 * 60;
+  game.keyCountPlayer = 0;
+  game.keyCountCpu = 0;
   holdBall(offenseTeam);
   setMessage(`${capitalize(offenseTeam)} ball. Check it from the 3-point line, then attack the ${attackHoop.side} basket.`);
   updateHud();
@@ -466,7 +484,7 @@ function releaseCheckBall() {
 }
 
 function desiredChargeForDistance(distance) {
-  return clamp(0.36 + distance / 760, 0.42, 0.9);
+  return 0.68;
 }
 
 function jump(actor, power = 8.6) {
@@ -487,7 +505,7 @@ function shootBall(shooter, defender) {
   const contestPenalty = contestDistance < 56 ? currentLevel().contest * (defender.blockTimer > 0 ? 1.08 : 0.82) : 0;
   const distancePenalty = clamp((distance - 180) / 560, 0, 0.36);
   const baseSkill = shooter.type === "cpu" ? currentLevel().shotSkill : 0.6;
-  const makeChance = clamp(baseSkill + timingScore * 0.3 - contestPenalty - distancePenalty, 0.14, 0.92);
+  const makeChance = clamp(baseSkill + timingScore * 0.34 - contestPenalty - distancePenalty, 0.16, 0.94);
   const made = Math.random() < makeChance;
 
   shooter.hasBall = false;
@@ -521,6 +539,38 @@ function shootBall(shooter, defender) {
   ball.bounceCount = 0;
 
   setMessage(shooter.type === "player" ? "Shoot!" : "CPU shoots!");
+}
+
+function performDunk(shooter, defender) {
+  const hoop = offensiveHoopFor(shooter.type);
+  const timingTarget = 0.7;
+  const timingScore = 1 - Math.abs(shooter.dunkCharge - timingTarget) * 2.4;
+  const contestPenalty = Math.abs(defender.x - shooter.x) < 48 && defender.blockTimer > 0 ? currentLevel().contest * 0.6 : 0;
+  const makeChance = clamp(0.72 + timingScore * 0.26 - contestPenalty, 0.18, 0.98);
+  const made = Math.random() < makeChance;
+
+  shooter.hasBall = false;
+  shooter.dunkCharge = 0;
+  shooter.dunkReady = false;
+  game.pendingShot = {
+    shooter: shooter.type,
+    hoop: hoop.side,
+    made,
+    counted: false,
+    dunk: true
+  };
+
+  jump(shooter, 9.4);
+  ball.mode = "air";
+  ball.holder = null;
+  ball.x = shooter.x + shooter.facing * 14;
+  ball.y = shooter.y - 48;
+  ball.vx = (hoop.x - ball.x) / 12;
+  ball.vy = (hoop.rimY - 12 - ball.y - 0.5 * BALL_GRAVITY * 12 * 12) / 12;
+  ball.scored = false;
+  ball.justHitBackboard = false;
+  ball.bounceCount = 0;
+  setMessage(shooter.type === "player" ? "Dunk attempt!" : "CPU tries to dunk!");
 }
 
 function maybeBlockShot(defender, shooter) {
@@ -596,6 +646,55 @@ function forcePossession(newOffense, reasonText) {
   setMessage(reasonText);
 }
 
+function inKey(actor, hoop) {
+  const keyWidth = 158;
+  const keyHeight = 144;
+  if (hoop.side === "left") {
+    return actor.x < keyWidth && actor.y >= FLOOR_Y - keyHeight;
+  }
+  return actor.x > WIDTH - keyWidth && actor.y >= FLOOR_Y - keyHeight;
+}
+
+function updateKeyViolation() {
+  if (game.phase !== "live") {
+    return;
+  }
+
+  const offense = offenseActor();
+  const keyHoop = offensiveHoopFor(game.possession);
+  if (inKey(offense, keyHoop)) {
+    if (game.possession === "player") {
+      game.keyCountPlayer += 1;
+      if (game.keyCountPlayer > 3 * 60) {
+        forcePossession("cpu", "3-second violation. CPU ball at the arc.");
+      }
+    } else {
+      game.keyCountCpu += 1;
+      if (game.keyCountCpu > 3 * 60) {
+        forcePossession("player", "CPU 3-second violation. Your ball at the arc.");
+      }
+    }
+  } else {
+    if (game.possession === "player") {
+      game.keyCountPlayer = 0;
+    } else {
+      game.keyCountCpu = 0;
+    }
+  }
+}
+
+function updateShotClock() {
+  if (game.phase !== "live") {
+    return;
+  }
+
+  game.shotClock -= 1;
+  if (game.shotClock <= 0) {
+    const newOffense = game.possession === "player" ? "cpu" : "player";
+    forcePossession(newOffense, "Shot clock violation. Check it from the 3-point line.");
+  }
+}
+
 function attemptSteal(attacker, defender) {
   if (game.phase !== "live" || attacker.stealCooldown > 0 || !defender.hasBall || Math.abs(attacker.x - defender.x) > 44) {
     return;
@@ -642,6 +741,22 @@ function updateActor(actor, movement, sprinting) {
 
   updateEnergy(actor, sprintAllowed, movement);
 
+  if (actor.hasBall && game.phase === "live") {
+    const dribbling = actor.type === "player" ? keys.dribble : true;
+    if (dribbling || movement === 0) {
+      actor.dribbleGrace = clamp(actor.dribbleGrace + 2, 0, 40);
+    } else {
+      actor.dribbleGrace -= 1;
+      if (actor.dribbleGrace <= 0) {
+        const other = actor.type === "player" ? "cpu" : "player";
+        forcePossession(other, actor.type === "player" ? "Travel / carry. CPU ball at the arc." : "CPU lost the dribble. Your ball at the arc.");
+        return;
+      }
+    }
+  } else {
+    actor.dribbleGrace = clamp(actor.dribbleGrace + 1, 0, 40);
+  }
+
   if (actor.stealCooldown > 0) {
     actor.stealCooldown -= 1;
   }
@@ -656,12 +771,24 @@ function updateActor(actor, movement, sprinting) {
 function updatePlayer() {
   const movement = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
   updateActor(player, movement, keys.sprint);
+  if (game.state !== "playing") {
+    return;
+  }
 
   if (player.hasBall && game.phase === "live" && keys.shoot && player.onGround) {
     player.shotCharge = clamp(player.shotCharge + 0.022, 0, 1);
     player.chargeLocked = true;
   } else if (player.hasBall && !keys.shoot) {
     player.shotCharge *= 0.84;
+  }
+
+  const hoop = offensiveHoopFor("player");
+  const closeEnoughToDunk = Math.abs(player.x - hoop.x) < 90 && player.onGround && player.hasBall && game.phase === "live";
+  if (closeEnoughToDunk && keys.dunk) {
+    player.dunkCharge = clamp(player.dunkCharge + 0.032, 0, 1);
+    player.dunkReady = true;
+  } else if (!keys.dunk) {
+    player.dunkCharge *= 0.82;
   }
 }
 
@@ -679,11 +806,16 @@ function updateCpu() {
     }
 
     if (game.phase === "live") {
+      const canDunk = Math.abs(cpu.x - hoop.x) < 84 && cpu.onGround;
+      if (canDunk && Math.random() < 0.012) {
+        cpu.dunkCharge = 0.7;
+        performDunk(cpu, player);
+      }
       const openLook = Math.abs(cpu.x - player.x) > 86 || player.blockTimer === 0;
       if (openLook) {
         cpu.shotCharge = clamp(cpu.shotCharge + level.reaction, 0, 1);
         const desired = desiredChargeForDistance(Math.abs(hoop.x - cpu.x));
-        if (cpu.shotCharge >= desired && game.cpuShotCooldown <= 0) {
+        if (cpu.shotCharge >= desired - 0.05 && game.cpuShotCooldown <= 0) {
           shootBall(cpu, player);
           cpu.shotCharge = 0;
           game.cpuShotCooldown = 55;
@@ -844,8 +976,13 @@ function handleInputEdges() {
     shootBall(player, cpu);
   }
 
+  if (edges.dunkWasDown && !keys.dunk && player.hasBall && game.phase === "live" && player.dunkReady) {
+    performDunk(player, cpu);
+  }
+
   edges.shootWasDown = keys.shoot;
   edges.defendWasDown = keys.defend;
+  edges.dunkWasDown = keys.dunk;
 }
 
 function updateGame() {
@@ -864,6 +1001,8 @@ function updateGame() {
   updateCpu();
   handleInputEdges();
   updateBall();
+  updateShotClock();
+  updateKeyViolation();
 
   if (game.dribbleTimer > 0) {
     game.dribbleTimer -= 1;
@@ -1156,6 +1295,36 @@ function drawSprintBar() {
   ctx.fillText("SPRINT", x - 12, y - 12);
 }
 
+function drawDunkBar() {
+  if (!player.hasBall || game.phase !== "live") {
+    return;
+  }
+
+  const x = 206;
+  const y = 324;
+  const w = 26;
+  const h = 138;
+  ctx.fillStyle = "rgba(0,0,0,0.34)";
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = "#ff9d2a";
+  ctx.fillRect(x + 4, y + h - player.dunkCharge * (h - 8) - 4, w - 8, player.dunkCharge * (h - 8));
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+
+  const targetY = y + h - 0.7 * (h - 8) - 4;
+  ctx.strokeStyle = "#ffea6a";
+  ctx.beginPath();
+  ctx.moveTo(x - 4, targetY);
+  ctx.lineTo(x + w + 4, targetY);
+  ctx.stroke();
+
+  ctx.fillStyle = "#fff0bd";
+  ctx.font = "bold 12px Trebuchet MS";
+  ctx.textAlign = "left";
+  ctx.fillText("DUNK", x - 4, y - 12);
+}
+
 function drawCoachPanel() {
   ctx.fillStyle = "rgba(8, 12, 18, 0.76)";
   ctx.fillRect(20, 124, 132, 284);
@@ -1172,23 +1341,24 @@ function drawCoachPanel() {
   ctx.fillStyle = "rgba(255,255,255,0.92)";
   ctx.fillText("A / D  Move", 34, 182);
   ctx.fillText("Shift  Sprint", 34, 208);
-  ctx.fillText("Space  Shoot", 34, 234);
-  ctx.fillText("Space  Jump", 34, 260);
+  ctx.fillText("F  Dribble", 34, 234);
+  ctx.fillText("Space  Shoot / Jump", 34, 260);
   ctx.fillText("S  Steal / Block", 34, 286);
+  ctx.fillText("E  Dunk", 34, 312);
 
   ctx.fillStyle = "#ffa14a";
-  ctx.fillText("Offense:", 34, 318);
+  ctx.fillText("Offense:", 34, 346);
   ctx.fillStyle = "rgba(255,255,255,0.9)";
-  ctx.fillText("run the lane,", 34, 338);
-  ctx.fillText("charge, and", 34, 356);
-  ctx.fillText("finish strong.", 34, 374);
+  ctx.fillText("hold F to dribble,", 34, 366);
+  ctx.fillText("use E near the rim", 34, 384);
+  ctx.fillText("and time the bar.", 34, 402);
 
   ctx.fillStyle = "#5bd3ff";
-  ctx.fillText("Check ball:", 34, 404);
+  ctx.fillText("Rules:", 34, 432);
   ctx.fillStyle = "rgba(255,255,255,0.9)";
-  ctx.fillText("after changes,", 34, 424);
-  ctx.fillText("tap Space", 34, 442);
-  ctx.fillText("to go live.", 34, 460);
+  ctx.fillText("24 sec shot clock,", 34, 452);
+  ctx.fillText("3 sec in the key,", 34, 470);
+  ctx.fillText("check after changes.", 34, 488);
 }
 
 function drawBanner() {
@@ -1216,6 +1386,7 @@ function render() {
   drawCoachPanel();
   drawShotMeter();
   drawSprintBar();
+  drawDunkBar();
   drawActor(player);
   drawActor(cpu);
   drawBall();
@@ -1232,12 +1403,18 @@ function handleKeyDown(event) {
   if (event.key === "Shift") {
     keys.sprint = true;
   }
+  if (event.key.toLowerCase() === "f") {
+    keys.dribble = true;
+  }
   if (event.key === " ") {
     keys.shoot = true;
     event.preventDefault();
   }
   if (event.key.toLowerCase() === "s" || event.key.toLowerCase() === "k") {
     keys.defend = true;
+  }
+  if (event.key.toLowerCase() === "e") {
+    keys.dunk = true;
   }
 }
 
@@ -1251,12 +1428,18 @@ function handleKeyUp(event) {
   if (event.key === "Shift") {
     keys.sprint = false;
   }
+  if (event.key.toLowerCase() === "f") {
+    keys.dribble = false;
+  }
   if (event.key === " ") {
     keys.shoot = false;
     event.preventDefault();
   }
   if (event.key.toLowerCase() === "s" || event.key.toLowerCase() === "k") {
     keys.defend = false;
+  }
+  if (event.key.toLowerCase() === "e") {
+    keys.dunk = false;
   }
 }
 
